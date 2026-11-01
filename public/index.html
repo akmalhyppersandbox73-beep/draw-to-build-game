@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1b1f3b">
+<title>🖍️ Draw To Build 🔨</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<!-- ===== HUD ===== -->
+<div id="hud" class="hidden">
+  <div id="topl">
+    <div id="chip"><span id="chipE"></span><b id="chipN"></b></div>
+    <div id="conn" class="hidden"><i></i><span></span></div>
+    <div id="fps"></div>
+  </div>
+  <div id="topr">
+    <button id="bCam" title="Camera (V)">🎥</button>
+    <button id="bChat" class="hidden" title="Chat (T)">💬<u id="unread" class="hidden"></u></button>
+    <button id="bMenu" title="Menu (Esc)">⏸</button>
+  </div>
+  <div id="cross"></div>
+  <div id="hint"></div>
+  <div id="edit" class="hidden">
+    <span id="editName"></span>
+    <button data-e="move">✋ Move</button><button data-e="rotl">↺</button><button data-e="rotr">↻</button>
+    <button data-e="smaller">➖</button><button data-e="bigger">➕</button>
+    <button data-e="pack">🎒 Pack</button><button data-e="del">🗑</button><button data-e="done">✔</button>
+  </div>
+  <div id="chat" class="hidden">
+    <div id="plist" class="hidden"></div>
+    <div id="clog"></div>
+    <div id="cform"><input id="cin" maxlength="200" placeholder="Say something..." autocomplete="off"><button id="cbtn">Send</button></div>
+  </div>
+  <div id="look"></div>
+  <div id="joy"><div id="knob"></div></div>
+  <div id="btns">
+    <button id="bDown" class="hidden">⬇</button>
+    <button id="bBuild" title="Build / place held item (B)">🔨</button>
+    <button id="bCanvas" title="Canvas (C)">✏️</button>
+    <button id="bInv" title="Inventory (Tab)">🎒</button>
+    <button id="bAct" title="Interact (E)">🖐</button>
+    <button id="bJump" title="Jump (Space)">⤒</button>
+  </div>
+</div>
+
+<!-- ===== MAIN MENU ===== -->
+<div id="menu" class="screen">
+  <div class="bgdots"></div>
+  <h1><span>🖍️</span> Draw To <b>Build</b> <span>🔨</span></h1>
+  <p class="sub">Sketch it. Build it. Share it.</p>
+  <div id="menuProfile" class="chipbig"><span id="mE"></span><b id="mN"></b><small>Edit profile</small></div>
+  <div class="menubtns">
+    <button class="big c1" id="mSingle">Singleplayer</button>
+    <button class="big c2" id="mMulti">Global Multiplayer</button>
+    <div class="row2"><button class="big c3" id="mSettings">Settings</button><button class="big c4" id="mCredits">Credits</button></div>
+  </div>
+</div>
+
+<!-- ===== MODALS ===== -->
+<div id="mServers" class="modal"><div class="card">
+  <h2>🌍 Servers</h2>
+  <div id="serverList"><button class="server" id="srvGlobal"><div><b>Global Build</b><small>Permanent shared world • everyone builds together</small></div><div class="srvinfo" id="srvInfo">checking...</div></button></div>
+  <div class="actions"><button class="x">Back</button></div>
+</div></div>
+
+<div id="mWorlds" class="modal"><div class="card">
+  <h2>🏝️ Your Worlds</h2>
+  <button class="big c1 wide" id="newWorld">➕ New World</button>
+  <div id="worldList" class="slots"></div>
+  <div class="actions"><button class="x">Back</button></div>
+</div></div>
+
+<div id="mSaves" class="modal"><div class="card">
+  <h2>💾 Save Build</h2>
+  <div id="saveList" class="slots"></div>
+  <div class="actions"><button class="x">Close</button></div>
+</div></div>
+
+<div id="mProfile" class="modal"><div class="card">
+  <h2>🙂 Your Profile</h2>
+  <label class="field">Player name<input id="nameIn" maxlength="16" autocomplete="off"></label>
+  <div class="label">Profile picture (100 emojis)</div>
+  <div id="emojiGrid"></div>
+  <div class="actions"><button id="profSave" class="primary">Save</button></div>
+</div></div>
+
+<div id="mSettings2" class="modal"><div class="card">
+  <h2>⚙️ Settings</h2>
+  <div class="setgrid">
+    <label>Look sensitivity<input type="range" id="sSens" min="0.3" max="2.5" step="0.1"></label>
+    <label>Field of view<input type="range" id="sFov" min="55" max="100" step="1"></label>
+    <label>Resolution<input type="range" id="sQual" min="0.5" max="1" step="0.25"></label>
+    <label class="chk"><input type="checkbox" id="sShadow"> Shadows</label>
+    <label class="chk"><input type="checkbox" id="sInvert"> Invert Y look</label>
+  </div>
+  <div class="label">Keyboard controls (click, then press a key)</div>
+  <div id="keyList"></div>
+  <div class="actions"><button id="keyReset">Reset keys</button><button class="x primary">Done</button></div>
+</div></div>
+
+<div id="mCredits2" class="modal"><div class="card">
+  <h2>✨ Credits</h2>
+  <p>Draw To Build — a creative 3D sandbox.<br>Built with Three.js, Node.js and WebSocket.</p>
+  <p>Draw anything. Build everything. Have fun!</p>
+  <div class="actions"><button class="x primary">Back</button></div>
+</div></div>
+
+<div id="mPause" class="modal"><div class="card narrow">
+  <h2>⏸ Paused</h2>
+  <button class="big c1 wide x">▶ Resume</button>
+  <button class="big c2 wide" id="pSave">💾 Save Build</button>
+  <button class="big c3 wide" id="pSet">⚙️ Settings</button>
+  <button class="big c4 wide" id="pQuit">🚪 Leave World</button>
+</div></div>
+
+<div id="mCanvas" class="modal"><div class="card wide2">
+  <div class="canvasrow">
+    <div class="padwrap"><canvas id="pad" width="320" height="320"></canvas></div>
+    <div class="padctl">
+      <div class="tools"><button data-t="pen" class="on">✏️</button><button data-t="eraser">🧽</button><button id="pUndo">↩</button><button id="pClear">🗑</button></div>
+      <div id="swatches"></div>
+      <label>Line width <input type="range" id="pWidth" min="3" max="40" value="12"></label>
+      <div class="seg" id="sizeSeg"><span>Size</span><button data-s="S">S</button><button data-s="M" class="on">M</button><button data-s="L">L</button><button data-s="XL">XL</button></div>
+      <label>Thickness <input type="range" id="pThick" min="0" max="3" step="0.5" value="1.5"></label>
+      <input id="pName" maxlength="20" placeholder="Name (optional)" autocomplete="off">
+      <div class="actions"><button class="x">Close</button><button id="pBuild" class="primary">🔨 Create / Build</button></div>
+    </div>
+  </div>
+</div></div>
+
+<div id="mInv" class="modal"><div class="card wide2">
+  <h2>🎒 Inventory</h2>
+  <div class="tabs" id="invTabs"><button data-tab="draw" class="on">Drawings</button><button data-tab="decor">Decor</button><button data-tab="tools">Tools</button><button data-tab="placed">Placed</button></div>
+  <div class="invrow"><div id="slots"></div><div id="detail"></div></div>
+  <div class="actions"><button class="x primary">Close</button></div>
+</div></div>
+
+<div id="loading" class="screen hidden"><h2>Loading world...</h2><div class="bar"><i id="loadBar"></i></div><p id="loadTip"></p></div>
+<div id="rotate"><div>📱↻<br>Please rotate your device to landscape</div></div>
+<div id="toast"></div>
+
+<script>
+  // three.js: served from npm install (offline-friendly), falls back to a CDN
+  (function(){ var s=document.createElement('script'); s.src='/vendor/three.min.js'; s.onerror=function(){ var f=document.createElement('script'); f.src='https://cdnjs.cloudflare.com/ajax/libs/three.js/r149/three.min.js'; f.onload=boot; document.head.appendChild(f); }; s.onload=boot; document.head.appendChild(s); var done=false;
+    function boot(){ if(done) return; done=true; ['js/builder.js','js/game.js'].reduce(function(p,src){ return p.then(function(){ return new Promise(function(res,rej){ var e=document.createElement('script'); e.src=src; e.onload=res; e.onerror=rej; document.body.appendChild(e); }); }); },Promise.resolve()).catch(function(){ alert('Failed to load game scripts.'); }); }
+  })();
+</script>
+</body>
+</html>
