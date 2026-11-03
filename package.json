@@ -1,10 +1,10 @@
 {
-  "name": "draw-to-build",
-  "version": "1.0.0",
-  "description": "Draw To Build - 3D sandbox where drawings become 3D objects. Singleplayer + Global Build multiplayer.",
+  "name": "draw-to-build-server",
+  "version": "2.0.0",
+  "description": "Global Build server for Draw To Build (ownership + 24h auto-delete). Zero dependencies.",
   "main": "server.js",
-  "scripts": { "start": "node server.js" },
+  "scripts": { "start": "node server.js", "test": "node test/server.test.js" },
   "engines": { "node": ">=18" },
-  "dependencies": { "three": "0.149.0", "ws": "^8.18.0" },
-  "license": "MIT"
+  "license": "UNLICENSED",
+  "private": true
 }

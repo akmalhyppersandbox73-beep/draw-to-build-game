@@ -1,55 +1,31 @@
-# 🖍️ Draw To Build 🔨
+# Draw To Build – Global Build server v2
 
-A 3D browser sandbox: draw on a small canvas, press **Create / Build**, and your drawing becomes a chunky 3D object in front of you.
-Play alone (**Singleplayer**, saves in your browser) or join the permanent shared world **Global Build** (**Global Multiplayer**).
+Zero-dependency Node.js (>= 18) server. **The old server did not know about ownership or the 24h rule – you must run this one
+and point `config.js` at it**, otherwise the game shows a "Server lama" warning and falls back to the old (unprotected) behaviour.
 
-Stack: HTML/CSS/JS, Three.js (r149), Node.js + WebSocket (`ws`). One process serves the frontend **and** the multiplayer server.
+## Run
+    cd server
+    PORT=8080 DATA_DIR=./data node server.js        # npm start
+    npm test                                        # 16 end-to-end tests (fake clock)
 
-## Run locally
-```bash
-npm install
-npm start          # http://localhost:3000
-```
-Open it in two browser windows → Global Multiplayer → **Global Build** to test multiplayer.
-
-## Deploy (GitHub → Suga)
-1. Push this folder to a GitHub repo (the repo root must contain `package.json` and `server.js`).
-2. In Suga, create a **Node.js web service** from the repo.
-   - Build command: `npm install`
-   - Start command: `npm start`
-   - Port: the app listens on `process.env.PORT || 3000`.
-   - WebSocket: the client connects to `ws(s)://<your-domain>/ws` on the same host, so no URL needs editing.
-3. **Persistence (important):** the Global Build world is written to `DATA_DIR/world.json` (default `./data`).
-   Many hosts have an ephemeral disk – attach a persistent volume in Suga and set `DATA_DIR` to its mount path
-   (e.g. `DATA_DIR=/data`), otherwise the world resets whenever the container is rebuilt.
-4. Health check path: `/health`. Status JSON: `/api/status`.
-> I could not verify Suga-specific settings (I have no access to its docs); the app is a standard Node web service, so any host that runs `npm start` and supports WebSockets works. Check Suga's docs for the exact field names.
-
-## Controls
-| | PC | Phone (landscape) |
+| env | default | meaning |
 |---|---|---|
-| Move | WASD | left joystick |
-| Look | mouse (click to lock) | drag right side |
-| Jump | Space | ⤒ |
-| Interact / select | E or click | 🖐 or tap an object |
-| Canvas | C | ✏️ |
-| Inventory | Tab | 🎒 |
-| Build / place held item | B | 🔨 |
-| Camera 1st/3rd | V | 🎥 |
-| Chat (multiplayer) | T | 💬 |
-| Menu | Esc | ⏸ |
-All keys can be rebound in Settings.
+| PORT | 8080 | listen port (cloud hosts usually set it for you) |
+| DATA_DIR | ./data | where `world.json` lives – **must be on persistent storage** |
+| TTL_HOURS | 24 | lifetime of a building (counted from `createdAt`) |
+| SWEEP_SECONDS | 30 | how often the sweeper runs (it also runs at start-up, on join, on add and on /api/status) |
+| SERVE_STATIC | – | set to `1` to also serve the game files (handy for local testing at http://localhost:8080) |
 
-## How drawing becomes 3D
-The canvas is sampled into a 40×40 colour grid; each filled cell becomes a column whose thickness grows toward the centre of the shape
-(distance transform), so flat sketches become rounded 3D bodies. Faces hidden between cells are culled and the result is one mesh.
-Complex drawings are simply approximated at 40×40. Use **Thickness** and **Size** in the canvas panel to tune it.
-Collision uses the same grid, so doorways and gaps in your drawings are walkable, and you can climb on top of things.
+Put it behind HTTPS/WSS (itch.io is https, so the browser requires `wss://`). Then edit `config.js` in the game:
 
-## Multiplayer notes
-- Everything (players, objects, edits, deletes, chat) is synced through `server.js`; new players receive the saved world.
-- Anyone can move/resize/delete any object (it is a collaborative sandbox). Limit: 1200 objects.
-- Player identity = random id kept in the browser's localStorage + chosen name/emoji.
+    SERVER_URL: 'wss://YOUR-HOST/ws',  STATUS_URL: 'https://YOUR-HOST/api/status'
 
-## Project layout
-`server.js` · `package.json` · `public/index.html` · `public/css/style.css` · `public/js/{builder,game}.js` · `data/` (world storage)
+## How the rules are enforced (all on the server)
+* **Identity** – the browser keeps a private random key; the server derives `playerId = "u"+sha256("dtb-v2:"+key)[0..24]`.
+  A `playerId`/`ownerId`/`pid` sent by a client is ignored. The key is never stored or broadcast.
+* **Ownership** – `add` stamps `ownerId` + `createdAt` itself; `upd`, `del` and `delmany` check `ownerId` for **every** id
+  (reply `delres {deleted, denied, missing}`); an object id can't be re-used to overwrite someone else's building.
+* **24h auto-delete** – `now - createdAt >= 24h` → removed from memory *and* `world.json` (flushed immediately) and
+  broadcast as `delmany {reason:'expired'}`. Based on the server clock and creation time, never on logins.
+* **Old data** – buildings in an existing `world.json` without `createdAt` get their 24h timer at first load and no owner
+  (`legacy`): nobody can edit/delete them, and they disappear after 24h.
