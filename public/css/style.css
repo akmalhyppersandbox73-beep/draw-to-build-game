@@ -100,9 +100,27 @@ body.touch #edit{bottom:6px;max-width:44vw}
 #plist{background:#fffe;border:3px solid var(--ink);border-radius:12px;padding:4px 8px;font-size:13px;max-height:24vh;overflow:auto;pointer-events:auto}
 body.touch #joy{display:block}
 body:not(.touch) #bJump,body:not(.touch) #bAct{display:none}
-#rotate{position:fixed;inset:0;z-index:200;background:var(--ink);color:#fff;display:none;align-items:center;justify-content:center;text-align:center;font-size:22px;font-weight:700}
+#rotate{position:fixed;inset:0;z-index:2000;background:var(--ink);color:#fff;display:none;align-items:center;justify-content:center;text-align:center;font-size:22px;font-weight:700}
 @media (orientation:portrait) and (pointer:coarse){#rotate{display:flex}}
 #loading{z-index:150;background:linear-gradient(#1b1f3b,#3a2f6b);color:#fff}
 .bar{width:min(360px,80vw);height:18px;border:3px solid #fff;border-radius:12px;overflow:hidden}.bar i{display:block;height:100%;width:0;background:var(--c3);transition:width .25s}
 #toast{position:fixed;left:50%;bottom:76px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:8px 16px;border-radius:14px;z-index:300;opacity:0;pointer-events:none;transition:opacity .25s;font-weight:700;max-width:86vw;text-align:center}
 #toast.show{opacity:1}
+
+/* layering fix: #look (full-screen touch area) must sit BELOW every HUD control */
+#look{z-index:1}
+#topl,#topr,#edit,#chat,#joy,#btns,#cross,#hint{z-index:5}
+#cross,#hint{pointer-events:none}
+
+/* ---- Inventory > Placed: multi-select (long press) ---- */
+.slot2{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;touch-action:pan-y}
+.slot2 .tm{position:absolute;top:1px;left:1px;font-style:normal;font-size:9px;font-weight:700;background:#1b1f3bcc;color:#fff;border-radius:8px;padding:0 4px;line-height:14px}
+.slot2 .ck{position:absolute;top:2px;right:2px;width:20px;height:20px;border-radius:50%;border:2px solid var(--ink);background:#fff;color:transparent;font-size:12px;line-height:16px;text-align:center;text-decoration:none;display:none}
+#slots.selecting .slot2:not(.empty) .ck{display:block}
+.slot2.chk{background:#ffe9a6;border-color:var(--c1);box-shadow:0 0 0 2px var(--c1) inset}
+.slot2.chk .ck{background:var(--c1);color:#fff;border-color:var(--c1)}
+#detail.selpanel{justify-content:flex-start;gap:6px}
+#detail.selpanel #selCount{font-size:20px}
+#detail button.danger{background:var(--c1);color:#fff}
+#detail button:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+#edit.ro button:not([data-e=done]){display:none}
