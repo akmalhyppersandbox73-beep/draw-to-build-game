@@ -16,8 +16,35 @@ const KEY_LABELS = { fwd: 'Forward', back: 'Backward', left: 'Left', right: 'Rig
 let settings = Object.assign({ sens: 1, fov: 70, shadows: true, quality: 1, invert: false }, store.get('settings', {}));
 settings.keys = Object.assign({}, DEFAULT_KEYS, settings.keys || {});
 let profile = store.get('profile', null) || { name: 'Builder' + (100 + Math.floor(Math.random() * 900)), emoji: '😎' };
-let pid = store.get('pid', null);
-if (!pid) { pid = 'p' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36); store.set('pid', pid); }
+// Identity: a private random key stays in this browser; the public player id is derived from it (sha256), exactly like the
+// server does. The server never trusts an id sent by the client - it re-derives it from the key and uses that for ownership.
+function sha256hex(str) {
+  const K = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+  const b = []; for (let i = 0; i < str.length; i++) b.push(str.charCodeAt(i) & 255); // key/prefix are plain ASCII
+  const bl = b.length * 8; b.push(0x80); while (b.length % 64 !== 56) b.push(0);
+  for (let i = 7; i >= 0; i--) b.push(i > 3 ? 0 : (bl >>> (i * 8)) & 255);
+  let h = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19]; const w = new Array(64), R = (x, n) => (x >>> n) | (x << (32 - n));
+  for (let o = 0; o < b.length; o += 64) {
+    for (let i = 0; i < 16; i++) w[i] = (b[o + i * 4] << 24) | (b[o + i * 4 + 1] << 16) | (b[o + i * 4 + 2] << 8) | b[o + i * 4 + 3];
+    for (let i = 16; i < 64; i++) { const s0 = R(w[i - 15], 7) ^ R(w[i - 15], 18) ^ (w[i - 15] >>> 3), s1 = R(w[i - 2], 17) ^ R(w[i - 2], 19) ^ (w[i - 2] >>> 10); w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0; }
+    let [a, b2, c, d, e, f, g, hh] = h;
+    for (let i = 0; i < 64; i++) { const S1 = R(e, 6) ^ R(e, 11) ^ R(e, 25), ch = (e & f) ^ (~e & g), t1 = (hh + S1 + ch + K[i] + w[i]) | 0, S0 = R(a, 2) ^ R(a, 13) ^ R(a, 22), mj = (a & b2) ^ (a & c) ^ (b2 & c), t2 = (S0 + mj) | 0; hh = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b2; b2 = a; a = (t1 + t2) | 0; }
+    h = [h[0] + a | 0, h[1] + b2 | 0, h[2] + c | 0, h[3] + d | 0, h[4] + e | 0, h[5] + f | 0, h[6] + g | 0, h[7] + hh | 0];
+  }
+  return h.map(x => ('00000000' + (x >>> 0).toString(16)).slice(-8)).join('');
+}
+function newSecretKey() {
+  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_', r = new Uint8Array(40);
+  if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(r); else for (let i = 0; i < r.length; i++) r[i] = Math.floor(Math.random() * 256);
+  let k = ''; for (let i = 0; i < r.length; i++) k += A[r[i] & 63]; return k;
+}
+let secretKey = null; try { secretKey = localStorage.getItem('dtb_key'); } catch (e) {}
+if (!secretKey || !/^[A-Za-z0-9_-]{32,128}$/.test(secretKey)) { secretKey = newSecretKey(); try { localStorage.setItem('dtb_key', secretKey); } catch (e) {} }
+const pidFromKey = k => 'u' + sha256hex('dtb-v2:' + k).slice(0, 24);
+let pid = pidFromKey(secretKey);
+let serverOffset = 0, serverTtl = 24 * 3600 * 1000; // server clock offset + building lifetime (from the server's init message)
+const serverNow = () => Date.now() + serverOffset;
+const isMine = o => mode !== 'mp' || (o.ownerId ? o.ownerId === pid : (net.legacy && !!o.owner && o.owner === profile.name)); // legacy (old server) fallback for untagged objects: match by builder name // your own buildings (everything in singleplayer)
 let inv = store.get('inv', []);
 let drawCount = store.get('drawCount', 0);
 const uid = p => p + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
@@ -29,7 +56,8 @@ function hint(m, ms) { const h = $('hint'); h.textContent = m; h.classList.add('
 function hideHint() { $('hint').classList.remove('show'); }
 
 // ---------------- three.js scene ----------------
-const renderer = new THREE.WebGLRenderer({ canvas: $('gl'), antialias: !isTouch, powerPreference: 'high-performance' });
+let renderer;
+try { renderer = new THREE.WebGLRenderer({ canvas: $('gl'), antialias: !isTouch, powerPreference: 'high-performance' }); } catch (e) { throw new Error('WebGL is not available in this browser: ' + e.message); }
 renderer.shadowMap.enabled = settings.shadows; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const scene = new THREE.Scene(); scene.fog = new THREE.Fog(0xdff3ff, 70, 330);
 const camera = new THREE.PerspectiveCamera(settings.fov, 1, 0.1, 700);
@@ -112,7 +140,7 @@ function buildWorld() {
   [-1.6, 1.6].forEach(px => { const p = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 2.6, 6), new THREE.MeshLambertMaterial({ color: 0x6a4420 })); p.position.set(px, 1.3, -5); scene.add(p); });
   colliders.push({ x: -1.6, z: -5, r: 0.3 }, { x: 1.6, z: -5, r: 0.3 }, { x: 0, z: -5, r: 1.2 });
 }
-buildWorld();
+try { buildWorld(); } catch (e) { console.error(e); setTimeout(() => toast('Scenery failed: ' + e.message), 500); }
 
 // ---------------- avatars ----------------
 const EMO_FONT = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
@@ -196,26 +224,42 @@ function blockedAt(x, z, feet) {
 }
 
 // ---- selection / editing ----
+function leftText(o) { if (mode !== 'mp' || net.legacy || !o.createdAt) return ''; const ms = serverTtl - (serverNow() - o.createdAt); if (ms <= 0) return 'segera hilang'; const m = Math.floor(ms / 60000), h = Math.floor(m / 60); return h ? h + 'j ' + (m % 60) + 'm' : Math.max(1, m) + 'm'; }
 function selectObj(id) {
-  sel = id; moveMode = false; const r = objs.get(id); if (!r) return deselect();
-  $('edit').classList.remove('hidden'); $('editName').textContent = r.o.nm || 'Object'; document.querySelector('[data-e=move]').classList.remove('on'); selBox.visible = true;
+  sel = id; moveMode = false; const r = objs.get(id); if (!r) return deselect(); const mine = isMine(r.o), lt = mine ? leftText(r.o) : '';
+  $('edit').classList.remove('hidden'); $('edit').classList.toggle('ro', !mine);
+  $('editName').textContent = mine ? (r.o.nm || 'Object') + (lt ? ' • ⏳' + lt : '') : '🔒 ' + (r.o.nm || 'Object') + ' • ' + (r.o.owner || 'pemain lain');
+  document.querySelector('[data-e=move]').classList.remove('on'); selBox.visible = true;
+  if (!mine) toast('Bangunan milik ' + (r.o.owner || 'pemain lain') + ' — tidak bisa diubah');
 }
 function deselect() { sel = null; moveMode = false; $('edit').classList.add('hidden'); selBox.visible = false; hideHint(); }
-function netUpd(o) { if (mode === 'mp') net.send({ t: 'upd', id: o.id, x: o.x, y: o.y, z: o.z, ry: normA(o.ry), s: o.s }); }
+function netUpd(o) { if (mode === 'mp' && isMine(o)) net.send({ t: 'upd', id: o.id, x: o.x, y: o.y, z: o.z, ry: normA(o.ry), s: o.s }); }
 function netAdd(o) { if (mode === 'mp') net.send({ t: 'add', o }); }
-function deleteObj(id) { if (!objs.has(id)) return; removeObj(id); if (mode === 'mp') net.send({ t: 'del', id }); }
+// Deleting always goes through the server in multiplayer: it checks ownership of EVERY id and answers with delres.
+let delReq = 0; const pendingDel = new Map();
+function requestDelete(ids, cb) {
+  ids = [...new Set(ids)].filter(id => objs.has(id) && isMine(objs.get(id).o)); if (!ids.length) { if (cb) cb({ deleted: [], denied: [], missing: [] }); return; }
+  if (mode === 'mp' && !net.legacy) {
+    if (!net.open) { toast('Offline — tidak bisa menghapus sekarang'); if (cb) cb(null); return; }
+    const req = ++delReq; pendingDel.set(req, cb || (() => {})); net.send({ t: 'delmany', ids, req });
+    setTimeout(() => { const f = pendingDel.get(req); if (f) { pendingDel.delete(req); toast('Server tidak merespons'); f(null); } }, 8000);
+  } else { ids.forEach(id => { removeObj(id); if (mode === 'mp') net.send({ t: 'del', id }); }); if (cb) cb({ deleted: ids, denied: [], missing: [] }); }
+}
+function deleteObj(id, cb) { requestDelete([id], cb); }
 function confirmMove() { const r = objs.get(sel); moveMode = false; document.querySelector('[data-e=move]').classList.remove('on'); hideHint(); if (r) { r.o.y = supportY(r.o.x, r.o.z, r.o.id); place(r); netUpd(r.o); } }
 function packObj(id) {
-  const r = objs.get(id); if (!r) return; if (inv.length >= 40) return toast('Inventory full (40 items)');
-  inv.unshift({ id: uid('i'), nm: r.o.nm || 'Object', d: r.o.d, s: r.o.s }); store.set('inv', inv); deleteObj(id); toast('Packed into inventory 🎒');
+  const r = objs.get(id); if (!r) return; if (!isMine(r.o)) return toast('Itu bukan bangunanmu'); if (inv.length >= 40) return toast('Inventory full (40 items)');
+  const item = { id: uid('i'), nm: r.o.nm || 'Object', d: r.o.d, s: r.o.s };
+  deleteObj(id, res => { if (res && res.deleted.includes(id)) { inv.unshift(item); store.set('inv', inv); toast('Packed into inventory 🎒'); } else if (res) toast('Gagal: bukan bangunanmu'); });
 }
 function editAction(a) {
   const r = objs.get(sel); if (!r) return; const o = r.o;
+  if (a !== 'done' && !isMine(o)) return toast('Bangunan ini milik ' + (o.owner || 'pemain lain') + ' — tidak bisa diubah');
   if (a === 'move') { moveMode = !moveMode; document.querySelector('[data-e=move]').classList.toggle('on', moveMode); if (moveMode) hint('Look where you want it, then tap ✔ / press E to place', 0); else confirmMove(); return; }
   if (a === 'rotl' || a === 'rotr') { o.ry = normA(o.ry + (a === 'rotl' ? 1 : -1) * Math.PI / 4); place(r); netUpd(o); }
   else if (a === 'smaller' || a === 'bigger') { o.s = clamp(o.s * (a === 'bigger' ? 1.25 : 0.8), 0.2, 8); o.y = supportY(o.x, o.z, o.id); place(r); netUpd(o); }
   else if (a === 'pack') packObj(sel);
-  else if (a === 'del') { deleteObj(sel); toast('Deleted'); }
+  else if (a === 'del') { deleteObj(sel, res => { if (res && res.deleted.length) toast('Deleted'); }); }
   else if (a === 'done') { if (moveMode) confirmMove(); deselect(); }
 }
 document.querySelectorAll('#edit [data-e]').forEach(b => b.addEventListener('click', () => editAction(b.dataset.e)));
@@ -223,7 +267,7 @@ function placeBlueprint(bp) {
   if (objs.size >= MAX_OBJ) return toast('Object limit reached');
   const s = bp.s || 1, ext = DTB.ext(bp.d), dist = 3.5 + Math.max(ext.bw, ext.bd) * s * 0.5;
   const x = clamp(P.x - Math.sin(yaw) * dist, -WORLD_R, WORLD_R), z = clamp(P.z - Math.cos(yaw) * dist, -WORLD_R, WORLD_R);
-  const o = { id: uid('o'), owner: profile.name, nm: bp.nm, d: bp.d, x, z, y: supportY(x, z, null), ry: normA(yaw), s };
+  const o = { id: uid('o'), owner: profile.name, ownerId: pid, createdAt: serverNow(), nm: bp.nm, d: bp.d, x, z, y: supportY(x, z, null), ry: normA(yaw), s };
   addObj(o); netAdd(o); selectObj(o.id); held = bp; toast('Built: ' + bp.nm);
 }
 
@@ -244,8 +288,13 @@ const down = new Set(); let jumpHeld = false, downHeld = false, jx = 0, jy = 0, 
 const typing = () => { const a = document.activeElement; return a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA'); };
 let rebinding = null, deliberate = false;
 const modalStack = [];
-function openModal(id) { exitLock(); const m = $(id); if (modalStack.includes(id)) return; modalStack.push(id); m.classList.add('show'); down.clear(); jx = jy = 0; }
-function closeModal() { const id = modalStack.pop(); if (id) $(id).classList.remove('show'); }
+function openModal(id) {
+  exitLock(); const m = $(id); if (modalStack.includes(id)) return;
+  modalStack.push(id);
+  m.style.zIndex = 80 + modalStack.length; // newest modal always on top (e.g. Settings opened from Pause)
+  m.classList.add('show'); down.clear(); jx = jy = 0;
+}
+function closeModal() { const id = modalStack.pop(); if (id) { const m = $(id); m.classList.remove('show'); m.style.zIndex = ''; if (id === 'mInv') resetSel(); } }
 function closeAllModals() { while (modalStack.length) closeModal(); }
 document.querySelectorAll('.modal .x').forEach(b => b.addEventListener('click', closeModal));
 function exitLock() { if (document.pointerLockElement) { deliberate = true; document.exitPointerLock(); } }
@@ -253,10 +302,14 @@ document.addEventListener('pointerlockchange', () => { if (!document.pointerLock
 document.addEventListener('pointerlockerror', () => { noLock = true; });
 addEventListener('keydown', e => {
   if (rebinding) { e.preventDefault(); if (e.code !== 'Escape') { settings.keys[rebinding] = e.code; saveSettings(); } rebinding = null; renderKeys(); return; }
-  if (e.code === 'Escape') { if (typing()) { document.activeElement.blur(); closeChat(); } else if (modalStack.length) closeModal(); else if (playing) openModal('mPause'); return; }
+  if (e.code === 'Escape') { if (typing()) { document.activeElement.blur(); closeChat(); } else if (modalStack.length) { if (modalStack[modalStack.length - 1] === 'mInv' && selMode) exitSel(); else closeModal(); } else if (playing) openModal('mPause'); return; }
   if (typing()) { if (e.code === 'Enter' && document.activeElement === $('cin')) sendChat(); return; }
   const K = settings.keys;
-  if (modalStack.length) { if (e.code === K.inv && modalStack[modalStack.length - 1] === 'mInv') { e.preventDefault(); closeModal(); } return; }
+  if (modalStack.length) {
+    const top = modalStack[modalStack.length - 1];
+    if (top === 'mInv' && selMode) { if (e.code === 'Delete' || e.code === 'Backspace') { e.preventDefault(); askDeleteSel(); return; } if ((e.ctrlKey || e.metaKey) && e.code === 'KeyA') { e.preventDefault(); selectAllPlaced(); return; } }
+    if (e.code === K.inv && top === 'mInv') { e.preventDefault(); closeModal(); } return;
+  }
   if (!playing) return;
   if (e.code === K.inv || e.code === 'Tab') { e.preventDefault(); openInventory(); return; }
   if (e.repeat) return;
@@ -338,13 +391,13 @@ function hint_update() { if (!sel && !moveMode && playing && $('hint').classList
 
 // ---------------- networking (WebSocket to the Global Build server) ----------------
 const net = {
-  ws: null, tries: 0, open: false, timer: 0, lastSend: 0, initCb: null,
+  ws: null, tries: 0, open: false, legacy: false, timer: 0, lastSend: 0, initCb: null,
   send(m) { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(m)); },
   connect() {
-    setConn('connecting'); const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'; let ws;
+    setConn('connecting'); const url = (window.DTB_CONFIG && DTB_CONFIG.SERVER_URL) || ((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'); let ws;
     try { ws = new WebSocket(url); } catch (e) { setConn('offline'); return this.retry(); }
     this.ws = ws;
-    ws.onopen = () => { this.tries = 0; this.send({ t: 'join', pid, name: profile.name, emoji: profile.emoji }); };
+    ws.onopen = () => { this.tries = 0; this.send({ t: 'join', v: 2, key: secretKey, pid, name: profile.name, emoji: profile.emoji }); };
     ws.onmessage = ev => { try { onNet(JSON.parse(ev.data)); } catch (e) { console.error(e); } };
     ws.onclose = ev => { if (this.ws !== ws) return; this.open = false; setConn('offline'); if (ev.code === 4000) { toast('Logged in from another tab'); return; } if (mode === 'mp' && !leaving) this.retry(); };
     ws.onerror = () => {};
@@ -362,15 +415,20 @@ function addRemote(p) {
 function dropRemote(id) { const r = remote.get(id); if (!r) return; scene.remove(r.av); remote.delete(id); }
 function onNet(m) {
   switch (m.t) {
-    case 'init': net.open = true; clearObjs(); [...remote.keys()].forEach(dropRemote); m.objects.forEach(addObj); m.players.forEach(addRemote);
+    case 'init': net.open = true; net.legacy = !(m.v >= 2); if (m.v >= 2) { if (m.you) pid = m.you; serverOffset = (m.serverTime || Date.now()) - Date.now(); serverTtl = m.ttlMs || serverTtl; }
+      else setTimeout(() => toast('⚠ Server lama: kepemilikan & auto-hapus 24 jam belum aktif. Deploy folder server/ yang baru.'), 800);
+      clearObjs(); pendingDel.clear(); [...remote.keys()].forEach(dropRemote); m.objects.forEach(addObj); m.players.forEach(addRemote);
       $('clog').innerHTML = ''; (m.chat || []).forEach(c => logChat(c, true)); setConn('online'); renderPlayers(); if (net.initCb) { net.initCb(); net.initCb = null; } break;
     case 'pj': addRemote(m.p); logSys(m.p.name + ' joined'); setConn('online'); renderPlayers(); break;
     case 'pl': { const r = remote.get(m.id); if (r) logSys(r.name + ' left'); dropRemote(m.id); setConn('online'); renderPlayers(); break; }
     case 'pos': { const r = remote.get(m.id); if (r) { r.t = { x: m.x, y: m.y, z: m.z, ry: m.ry, mv: m.mv }; } break; }
     case 'prof': { const r = remote.get(m.id); if (r) { r.name = m.name; r.emoji = m.emoji; setAvatarProfile(r.av, m.name, m.emoji); renderPlayers(); } break; }
-    case 'add': addObj(m.o); break;
+    case 'add': { const r = objs.get(m.o.id); if (r) { Object.assign(r.o, { ownerId: m.o.ownerId, owner: m.o.owner, createdAt: m.o.createdAt }); refreshPlaced(); } else { addObj(m.o); if (m.o.ownerId === pid) refreshPlaced(); } break; }
+    case 'adderr': { const r = objs.get(m.id); if (r) removeObj(m.id); toast(m.m || 'Objek ditolak server'); refreshPlaced(); break; }
     case 'upd': { const r = objs.get(m.id); if (r && !(moveMode && sel === m.id)) { Object.assign(r.o, { x: m.x, y: m.y, z: m.z, ry: m.ry, s: m.s }); place(r); } break; }
-    case 'del': removeObj(m.id); break;
+    case 'del': removeObj(m.id); refreshPlaced(); break;
+    case 'delmany': { const mineGone = m.ids.filter(id => objs.has(id) && isMine(objs.get(id).o)).length; m.ids.forEach(removeObj); if (m.reason === 'expired' && mineGone) toast('⏳ ' + mineGone + ' bangunanmu hilang (batas 24 jam)'); if (mineGone) refreshPlaced(); break; }
+    case 'delres': { const f = pendingDel.get(m.req); if (f) { pendingDel.delete(m.req); f(m); } break; }
     case 'chat': logChat(m.c); break;
     case 'count': setConn('online'); break;
     case 'err': toast(m.m); break;
@@ -443,26 +501,86 @@ $('pBuild').addEventListener('click', () => {
   const item = { id: uid('i'), nm: $('pName').value.trim() || 'Drawing ' + drawCount, d, s: 1 }; inv.unshift(item); store.set('inv', inv); $('pName').value = '';
   closeModal(); placeBlueprint(item);
 });
-let invTab = 'draw', invSel = null;
-function openInventory() { if (!playing) return; invSel = null; renderInv(); openModal('mInv'); }
-document.querySelectorAll('#invTabs [data-tab]').forEach(b => b.addEventListener('click', () => { invTab = b.dataset.tab; invSel = null; renderInv(); }));
+let invTab = 'draw', invSel = null, selMode = false, selConfirm = false, suppressClick = 0; const selSet = new Set();
+const PLACED_CAP = 300;
+function openInventory() { if (!playing) return; invSel = null; resetSel(); renderInv(); openModal('mInv'); }
+document.querySelectorAll('#invTabs [data-tab]').forEach(b => b.addEventListener('click', () => { invTab = b.dataset.tab; invSel = null; resetSel(); renderInv(); }));
 const TOOLS = [{ id: 'speed', nm: 'Speed Boots', em: '👟', desc: 'Run much faster.' }, { id: 'jump', nm: 'Spring Boots', em: '🦘', desc: 'Jump much higher.' }, { id: 'fly', nm: 'Fly Wand', em: '🪄', desc: 'Fly! Jump = up, Shift or ⬇ = down.' }];
 function invItems() {
   if (invTab === 'draw') return inv.map(i => ({ kind: 'bp', nm: i.nm, d: i.d, ref: i }));
   if (invTab === 'decor') return DTB.presets.map(p => ({ kind: 'bp', nm: p.nm, get d() { return DTB.presetData(p); }, preset: true }));
   if (invTab === 'tools') return TOOLS.map(t => ({ kind: 'tool', nm: t.nm, em: t.em, t }));
-  return [...objs.values()].sort((a, b) => Math.hypot(a.o.x - P.x, a.o.z - P.z) - Math.hypot(b.o.x - P.x, b.o.z - P.z)).slice(0, 60).map(r => ({ kind: 'placed', nm: r.o.nm || 'Object', d: r.o.d, rec: r }));
+  return placedList();
+}
+function placedList() { return [...objs.values()].filter(r => isMine(r.o)).sort((a, b) => Math.hypot(a.o.x - P.x, a.o.z - P.z) - Math.hypot(b.o.x - P.x, b.o.z - P.z)).slice(0, PLACED_CAP).map(r => ({ kind: 'placed', key: r.o.id, nm: r.o.nm || 'Object', d: r.o.d, rec: r })); }
+function attachLongPress(el, onLong) {
+  let t = 0, sx = 0, sy = 0; const cancel = () => clearTimeout(t);
+  // while the finger/mouse is still down after a long press, the click that follows the release must be ignored
+  const fire = () => { suppressClick = Infinity; const rel = () => { removeEventListener('pointerup', rel, true); removeEventListener('pointercancel', rel, true); setTimeout(() => { suppressClick = 0; }, 60); }; addEventListener('pointerup', rel, true); addEventListener('pointercancel', rel, true); onLong(); };
+  el.addEventListener('pointerdown', e => { if (e.button > 0) return; sx = e.clientX; sy = e.clientY; cancel(); t = setTimeout(fire, 450); });
+  el.addEventListener('pointermove', e => { if (Math.hypot(e.clientX - sx, e.clientY - sy) > 10) cancel(); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => el.addEventListener(ev, cancel));
+  el.addEventListener('contextmenu', e => { e.preventDefault(); cancel(); if (suppressClick === Infinity) return; suppressClick = performance.now() + 60; onLong(); }); // right-click on PC / system long-press menu
+}
+function resetSel() { selMode = false; selConfirm = false; selSet.clear(); }
+function refreshPlaced() { if (modalStack.includes('mInv') && invTab === 'placed') renderInv(); }
+function exitSel() { resetSel(); renderInv(); }
+function beginSel(key) { if (invTab !== 'placed') return; selMode = true; selConfirm = false; selSet.add(key); try { if (navigator.vibrate) navigator.vibrate(15); } catch (e) {} paintSel(); }
+function toggleSel(key) { if (selSet.has(key)) selSet.delete(key); else selSet.add(key); selConfirm = false; paintSel(); }
+function selectAllPlaced() { placedList().forEach(it => selSet.add(it.key)); selMode = true; selConfirm = false; paintSel(); }
+function askDeleteSel() { if (!selSet.size) return toast('Pilih objek dulu'); selConfirm = true; paintSel(); }
+function doDeleteSel() {
+  const ids = [...selSet];
+  requestDelete(ids, res => {
+    if (!res) { selConfirm = false; paintSel(); return; }
+    selConfirm = false; [...res.deleted, ...res.denied, ...res.missing].forEach(id => selSet.delete(id));
+    let msg = res.deleted.length + ' bangunan dihapus'; if (res.denied.length) msg += ' • ' + res.denied.length + ' ditolak (bukan milikmu)'; toast(msg);
+    if (!selSet.size) selMode = false; renderInv();
+  });
+}
+function paintSel() {
+  document.querySelectorAll('#slots .slot2[data-key]').forEach(el => { const k = el.dataset.key, on = selMode && selSet.has(k); el.classList.toggle('chk', on); el.classList.toggle('sel', selMode ? on : invSel === k); });
+  $('slots').classList.toggle('selecting', selMode);
+  if (selMode) renderSelDetail();
+  else if (!invSel) renderInv();
+}
+function renderSelDetail() {
+  const d = $('detail'), n = selSet.size, total = placedList().length; d.innerHTML = ''; d.classList.add('selpanel');
+  const b = document.createElement('b'); b.id = 'selCount'; b.textContent = 'Terpilih: ' + n; d.appendChild(b);
+  const sm = document.createElement('small'); sm.textContent = selConfirm ? 'Hapus ' + n + ' bangunan secara permanen?' : 'Ketuk objek untuk memilih / batal pilih'; d.appendChild(sm);
+  const btn = (t, act, f, dis) => { const x = document.createElement('button'); x.textContent = t; x.dataset.act = act; if (dis) x.disabled = true; x.addEventListener('click', f); d.appendChild(x); return x; };
+  if (selConfirm) { btn('✔ Ya, Hapus (' + n + ')', 'yes', doDeleteSel).classList.add('danger'); btn('Tidak', 'no', () => { selConfirm = false; paintSel(); }); }
+  else { btn('🗑 Hapus' + (n ? ' (' + n + ')' : ''), 'del', askDeleteSel, !n).classList.add('danger'); btn('☑ Pilih Semua (' + total + ')', 'all', selectAllPlaced); btn('✖ Batal', 'cancel', exitSel); }
 }
 function renderInv() {
   document.querySelectorAll('#invTabs [data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === invTab));
-  const items = invItems(), box = $('slots'); box.innerHTML = ''; const total = Math.max(20, items.length + (invTab === 'draw' ? 0 : 0));
+  const items = invItems(), box = $('slots'); box.innerHTML = ''; const total = Math.max(20, items.length); $('detail').classList.remove('selpanel');
+  items.forEach((it, i) => { it.key = it.key || it.nm + i; });
+  if (invTab !== 'placed') resetSel(); else for (const k of [...selSet]) if (!items.some(x => x.key === k)) selSet.delete(k); // forget objects that no longer exist
+  box.classList.toggle('selecting', selMode);
   for (let i = 0; i < total; i++) {
-    const it = items[i], s = document.createElement('div'); s.className = 'slot2' + (it ? '' : ' empty') + (it && invSel === it.nm + i ? ' sel' : '');
-    if (it) { if (it.kind === 'tool') { const e = document.createElement('div'); e.className = 'em'; e.textContent = it.em; s.appendChild(e); } else s.appendChild(DTB.thumb(it.d, 64)); const n = document.createElement('span'); n.textContent = it.nm; s.appendChild(n); s.addEventListener('click', () => { invSel = it.nm + i; renderInv(); showDetail(it); }); }
+    const it = items[i], s = document.createElement('div'); s.className = 'slot2' + (it ? '' : ' empty');
+    if (it) {
+      s.dataset.key = it.key; if (selMode ? selSet.has(it.key) : invSel === it.key) s.classList.add('sel'); if (selMode && selSet.has(it.key)) s.classList.add('chk');
+      if (it.kind === 'tool') { const e = document.createElement('div'); e.className = 'em'; e.textContent = it.em; s.appendChild(e); } else s.appendChild(DTB.thumb(it.d, 64));
+      const n = document.createElement('span'); n.textContent = it.nm; s.appendChild(n);
+      if (it.kind === 'placed') {
+        const lt = leftText(it.rec.o); if (lt) { const tm = document.createElement('i'); tm.className = 'tm'; tm.textContent = '⏳' + lt.split(' ')[0]; s.appendChild(tm); }
+        const ck = document.createElement('u'); ck.className = 'ck'; ck.textContent = '✔'; s.appendChild(ck);
+        attachLongPress(s, () => beginSel(it.key));
+      }
+      s.addEventListener('click', ev => {
+        if (performance.now() < suppressClick) return;
+        if (it.kind === 'placed' && selMode) return toggleSel(it.key);
+        if (it.kind === 'placed' && (ev.ctrlKey || ev.shiftKey || ev.metaKey)) return beginSel(it.key);
+        invSel = it.key; renderInv(); showDetail(it);
+      });
+    }
     box.appendChild(s);
   }
-  if (!invSel) $('detail').innerHTML = '<b>Select an item</b><small>' + (invTab === 'draw' ? 'Your drawings appear here. Draw with ✏️!' : invTab === 'placed' ? 'Objects in this world, nearest first.' : '') + '</small>';
-  else { const it = items.find((x, i) => x.nm + i === invSel); if (it) showDetail(it); }
+  if (selMode) return renderSelDetail();
+  if (!invSel) $('detail').innerHTML = '<b>Select an item</b><small>' + (invTab === 'draw' ? 'Your drawings appear here. Draw with ✏️!' : invTab === 'placed' ? 'Hanya bangunan milikmu. Tekan lama (atau klik kanan) sebuah objek untuk memilih beberapa.' + (mode === 'mp' && !net.legacy ? ' Bangunan Global hilang otomatis setelah 24 jam.' : '') : '') + '</small>';
+  else { const it = items.find(x => x.key === invSel); if (it) showDetail(it); }
 }
 function showDetail(it) {
   const d = $('detail'); d.innerHTML = ''; const b = document.createElement('b'); b.textContent = it.nm; d.appendChild(b);
@@ -471,7 +589,11 @@ function showDetail(it) {
   const btn = (t, f) => { const x = document.createElement('button'); x.textContent = t; x.addEventListener('click', f); d.appendChild(x); };
   if (it.kind === 'bp') { const bp = it.ref || { id: 'preset', nm: it.nm, d: it.d, s: 1 }; btn('🔨 Place in world', () => { closeModal(); placeBlueprint(bp); }); btn('✋ Hold for Build key', () => { held = bp; toast('Holding: ' + bp.nm); }); if (it.ref) btn('🗑 Remove from inventory', () => { inv = inv.filter(x => x !== it.ref); store.set('inv', inv); invSel = null; renderInv(); }); }
   if (it.kind === 'tool') btn(tools[it.t.id] ? 'Unequip' : 'Equip', () => { tools[it.t.id] = !tools[it.t.id]; if (it.t.id === 'fly') $('bDown').classList.toggle('hidden', !(tools.fly && isTouch)); toast(it.nm + (tools[it.t.id] ? ' equipped' : ' removed')); showDetail(it); });
-  if (it.kind === 'placed') { btn('🎯 Select', () => { closeModal(); selectObj(it.rec.o.id); }); btn('🎒 Pack into inventory', () => { packObj(it.rec.o.id); invSel = null; renderInv(); }); btn('🗑 Delete', () => { deleteObj(it.rec.o.id); invSel = null; renderInv(); }); }
+  if (it.kind === 'placed') {
+    const lt = leftText(it.rec.o); if (lt) { const t = document.createElement('small'); t.textContent = '⏳ Hilang dalam ' + lt; d.appendChild(t); }
+    btn('🎯 Select', () => { closeModal(); selectObj(it.rec.o.id); }); btn('☑ Pilih beberapa', () => beginSel(it.key));
+    btn('🎒 Pack into inventory', () => { packObj(it.rec.o.id); invSel = null; renderInv(); }); btn('🗑 Delete', () => { deleteObj(it.rec.o.id, () => { invSel = null; renderInv(); }); });
+  }
 }
 
 // ---------------- profile / settings UI ----------------
@@ -502,9 +624,28 @@ $('keyReset').addEventListener('click', () => { settings.keys = Object.assign({}
 const TIPS = ['Tip: thicker drawings make chunkier 3D objects.', 'Tip: tap an object to move, rotate or resize it.', 'Tip: draw anything — houses, cars, robots, pets!', 'Tip: switch between first and third person with 🎥.'];
 function progress(p, t) { $('loadBar').style.width = p + '%'; if (t) $('loadTip').textContent = t; }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// ---- force landscape on phones: fullscreen + orientation lock, retried on every tap / change ----
+const isPortrait = () => innerHeight > innerWidth;
+function lockLandscape() {
+  try { const o = screen.orientation; if (o && o.lock) { const l = o.lock('landscape'); if (l && l.catch) l.catch(() => {}); } } catch (e) {}
+}
+function ensureLandscape() {
+  if (!isTouch) return;
+  lockLandscape(); // some browsers allow the lock without fullscreen
+  try {
+    const de = document.documentElement, rf = de.requestFullscreen || de.webkitRequestFullscreen;
+    if (!document.fullscreenElement && !document.webkitFullscreenElement && rf) { const fr = rf.call(de); if (fr && fr.then) fr.then(lockLandscape, () => {}); } // never await: promise can hang on some browsers
+  } catch (e) {}
+}
+if (isTouch) {
+  ['pointerdown', 'touchend', 'click'].forEach(ev => addEventListener(ev, () => { if (isPortrait() || !(document.fullscreenElement || document.webkitFullscreenElement)) ensureLandscape(); }, { passive: true, capture: true }));
+  ['fullscreenchange', 'webkitfullscreenchange', 'orientationchange', 'visibilitychange'].forEach(ev => (ev === 'visibilitychange' ? document : window).addEventListener(ev, () => setTimeout(lockLandscape, 150)));
+  if (screen.orientation && screen.orientation.addEventListener) screen.orientation.addEventListener('change', () => { if (isPortrait()) lockLandscape(); });
+  lockLandscape();
+}
 async function startGame(m, opts) {
   opts = opts || {}; leaving = false; mode = m; $('menu').classList.add('hidden'); $('loading').classList.remove('hidden'); progress(10, TIPS[Math.floor(Math.random() * TIPS.length)]);
-  if (isTouch) { try { await document.documentElement.requestFullscreen(); screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape').catch(() => {}); } catch (e) {} }
+  ensureLandscape();
   deselect(); clearObjs(); [...remote.keys()].forEach(dropRemote); P.x = 0; P.y = 0; P.z = 10; P.vy = 0; yaw = 0; pitch = -0.1; currentSlot = opts.slot == null ? null : opts.slot;
   Object.keys(tools).forEach(k => tools[k] = false); $('bDown').classList.add('hidden'); held = inv[0] || null;
   await sleep(250); progress(45);
@@ -520,13 +661,13 @@ async function startGame(m, opts) {
 }
 function leaveGame() {
   if (mode === 'sp' && currentSlot !== null) saveSlot(currentSlot, true);
-  leaving = true; playing = false; mode = null; net.close(); closeAllModals(); exitLock(); deselect(); clearObjs(); [...remote.keys()].forEach(dropRemote); closeChat();
+  leaving = true; playing = false; mode = null; net.close(); pendingDel.clear(); closeAllModals(); exitLock(); deselect(); clearObjs(); [...remote.keys()].forEach(dropRemote); closeChat();
   $('hud').classList.add('hidden'); $('menu').classList.remove('hidden'); if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
 }
 $('mSingle').addEventListener('click', () => { renderSlots($('worldList'), false); openModal('mWorlds'); });
 $('newWorld').addEventListener('click', () => { closeAllModals(); startGame('sp', {}); });
 $('mMulti').addEventListener('click', () => { openModal('mServers'); refreshServer(); });
-async function refreshServer() { const i = $('srvInfo'); i.textContent = 'checking...'; try { const r = await fetch('/api/status', { cache: 'no-store' }), j = await r.json(); i.textContent = '🟢 ' + j.players + ' online • ' + j.objects + ' objects'; } catch (e) { i.textContent = '🔴 unreachable'; } }
+async function refreshServer() { const i = $('srvInfo'); i.textContent = 'checking...'; try { const r = await fetch((window.DTB_CONFIG && DTB_CONFIG.STATUS_URL) || '/api/status', { cache: 'no-store' }), j = await r.json(); i.textContent = '🟢 ' + j.players + ' online • ' + j.objects + ' objects'; } catch (e) { i.textContent = '▶ Join'; } }
 $('srvGlobal').addEventListener('click', () => { closeAllModals(); startGame('mp'); });
 $('mSettings').addEventListener('click', openSettings); $('mCredits').addEventListener('click', () => openModal('mCredits2'));
 $('pSet').addEventListener('click', openSettings);
@@ -545,5 +686,5 @@ function frame(now) {
   sendT += dt; if (sendT >= 0.1 && mode === 'mp' && net.open) { sendT = 0; net.send({ t: 'pos', x: +P.x.toFixed(2), y: +P.y.toFixed(2), z: +P.z.toFixed(2), ry: +normA(P.heading).toFixed(2), mv: +Math.min(P.mv, 3).toFixed(1) }); }
 }
 refreshProfileUI(); requestAnimationFrame(frame);
-window.__dtb = { P, objs, scene, camera, get mode() { return mode; } };
+window.__dtb = { P, objs, scene, camera, get mode() { return mode; }, get pid() { return pid; }, derivedPid: pidFromKey(secretKey), select: selectObj, act: editAction, get sel() { return sel; }, get serverOffset() { return serverOffset; } };
 })();
